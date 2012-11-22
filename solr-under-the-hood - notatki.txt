@@ -1,0 +1,135 @@
+15 osób, różne stopnie zaawansowania (np ebay). Czasem kilka milionów dokumentów.
+Głównie Solr 3.x
+
+Day 1:
+	1. Solr Architecture
+	2. Search
+Day 2:
+	3. Admin
+	4. Solr 4.0
+	5. Extending Solr
+
+zmiany 3.x - 4.0:
+	lucene 4.x - przepisany od zera, czasem 40x(!) szybszy
+	syntactic sugar, np 
+		range queries [] - inclusive, [) -exclusive, 
+		regexp search
+		partial updates
+	solr cloud
+
+
+[1]. Solr Architecture
+Zawsze warto zaorać indeks, żeby był dostosowany do aktualnych wymagań. Solr nie powinien być źródłem danych (przynajmniej w 3.x) - jest jedynie indeksem dla innego źródła danych. Solr 4.0 kieryje się w stronę NoSQL:
+Partition Tolerance + consistency (2 z CAP theorem, np jedna osoba coś indeksuje, druga to samo - która wygra)
+brak security - każdy z dostępem HTTP dostaje zawartość;
+Dlaczego nie korzystać z samego lucene? Dostęp do indeksów lucene jest ograniczony do 1 JVM - trzeba udostępnić jako klient - serwer.
+Data Import Handler - lepiej nie korzystać do dużych zbiorów danych, lepiej napisać własny mechanizm indeksujący.
+
+Request Handlers - mapowanie URL na akcje;
+	w 4.0 lepiej obsługiwany jest contentType (?) Apache Tika - context extractor project, dobre do indeksowania zawartości dokumentów; Ale zawsze warto samemu to dodać do mechanizmu indeksującego, bo można nałożyć konkretne założenia co do rozwiązania;
+	Search Components, np QueryComponent, FacetComponent
+Response Writers - może warto obsłużyć zdeserializowany obiekt Javy, zamiast konsumować i wysyłać XML z SolrJ. Najszybszy sposób.
+
+Pytanie z sali: Czy są sposoby zmiany protokołu odpytania Solr (inaczej niż przed HTTP, który ma sporo "overhead")? 
+Odpowiedź: Trzeba rozpakować WARa i samemu napisać :) Na razie Solr jest śliśle związany z HTTP. Dojdziemy do optymalizacji, m.in. Solr NRT.
+
+W Solr 4.0 można podmienić źródło zapisu danych (np zamiast do pliku, gdzieś indziej).
+
+Ciekawostki prowadzącego -> 
+	XPatch determinuje nazwę pola w przypadku ładowania z XML
+	Admin wishlist: aktualizacja schematu
+	Restart pojedynczych core'ów zamiast całego JVM
+	Do sprawdzenia: widok velocity-> /browse
+
+Caches:
+Cache - pierwsze żądanie zajmie 45 sek, drugie ok 1 sek. 
+staticWarmingQuerie - po indeksowaniu
+Każdy facet wymaga cache -> commit invaliduje wszystkie cache-> staticWarmingQeries na pola facetowane
+
+Uwaga: funkcjonalnośc zmieniła się w 4.0
+
+Pytanie z sali: co w przypadku, kiedy commity są częste?
+Odpowiedź: Później
+
+Warto robić filtercache, bo są ograniczone możliwości wyboru filtrów; Search query cache nie ma, bo jest mała szansa na powtórzenie dokładnie tego samego zapytania;
+
+Solr może używać memorymaped file system -> SO wykorzystuje disc cache; warto przydzielić nie cały RAM do JVM z Solr, tylko zostawić trochę dla SO; 
+
+Pytanie z sali: Gdzie znaleźć cache usage?
+Odpowiedź: Admin UI, po commicie
+
+Lucene i Solr połączyły się w jeden projekt; Kilka rzeczy jest w obu miejscach (np przed 4.0 faceting był tylko w Solr), niewiadomo czemu;
+Solr (poza replikacją w Solr 3.x, która przerzuca całe pliki) nie rusza plików indeksów lucene;
+
+Replikacja:
+W 4.0 przebudowano ją całkowicie. 
+	Replikacja 3.x: 
+	Na dysku pliku się nie zmieniają - przenosi się całe pliki; Jak zmiana indeksu na masterze jest drastyczna, w skrajnym przypadku przeniesie się cały indeks (wszystkie pliki indeksu lucene);
+	Replikacja 4.0:
+	Używa transaction log i to jego zawartość jest propagowana po commicie; Każda replika może mieć inne pliki - ale ogólna zawartość jest ta sama;
+
+
+[2]. Search
+Można robić swój schemat zapytań, zamiast robić próbować robić specyficzne rzeczy w tym języku, co jest. Trzeba wtedy napisać QueryParser:
+buduje się Jar, instaluje w miejscu na pluginy i rejestruje w pliku konfiguracyjnym.
+
+Uwaga: Brak dalszego rozwoju lini 3.6 - tylko w przypadku grubych zmian wyjdzie 3.7. Na trynku jest Solr 5.0
+
+Różnie algorytmy facetowania, w zależności od tego, czy lista wartości jest w miarę stała, czy zmienna; Ma znaczenie wydajnościowe tylko w przypadku indeksów o rozmiarze > ~10 000 000;
+
+W 4.0 spellchecking jest prostrzy;
+Shigle (?) -> multiple terms on the same position; indeksowanie zdania "I like summer" na tokeny "I", "I like", "I like summer";
+tak jak NGram - który działa tak samo dla pojedynczych liter, a nie dla całych słów;
+
+Opowiadanie z sali: osobny klaster dla sugestii, 4 poziomy shigle(?), varnish przed nimi, aktualizowany co 6h; stopwords mają tylko badwords;
+
+More-Like-This: "machine learning" dla ubogich :) porównuje wszystkie termny z dokumentu ze wszystkimi termami z innego dokumentu;
+
+Distributed search - każdy komponent (faceting, more-like-this) powinien mieć dwie wersje (nie wszystkie jeszcze mają - trzeba kontrybuować) -> taką, która deleguje i zbiera wyniki (innaczej zbiera wyniki dla facetowania, inaczej dla more-like-this), oraz taką, która wykonuje na swoich danych tą operację;
+
+Commit:
+IndexWriter -> zapisuje dokumenty z RAMU na dysk jako nowy segment; multithreaded + buffer; konfigurowalny ilością dokumentów w buforze i ilością wątków; Lepiej jest indeksować wszystko na raz -> 
+IndexSearcher -> tworzy się nowy co commit; Przez to niszczą się cache; W 3.6 trzymał filter cache per indeks -> dodanie nowego dokumentu powodowało ponowne zbudowanie całego cache; teraz jest filter cache per segment; 
+
+Każdy segment to dyskretny indeks(?); Przy wyszukaniu, każdy segment jest przeszukiwany; Im więcej segmentów, tym mniej efektywne zapytanie będzie; Aktualizacja dokumentu = dodanie nowego w nowym segmencie i oznaczenie jako usunięty w starym segmencie; Nie usuwa się dokumentu od razu - zaznacza się je tylko jako usunięte; nie ma mapowania dokumentu na segment, w którym się znajduje - trzeba przeszukać cały indeks w poszukiwaniu dokumentów; Co więcej, zwrócone zostaną wszystkie poprzednie wersje tego dokumentu (o tym samym ID, oznaczone, jako usunięte) - dlatego warto je w końcu usunąć; Proces optymalizacji złącza wszystkie segmenty w jeden; Kiedy segmentów jest za dużo, "Merge Policy" wybiera które (na podstawie arbitralnych wartości - który ile ma usuniętych dokumentów itp) segmenty trzeba złączyć (stworzyć nowy na podstawie starych, kopiując całe zawartości -> implikuje to kopiowanie całych segmentów do nowego); We wczesnych wersjach 3.x to działało słabo, teraz jest osom; Teraz lepiej nie optymalizować ręcznie - wystarczy wybrać właściwą "Merge Policy"; W czasie optymalizacji, IndexWriter jest wstrzymany z zapisem nowych segmentów na dysk - ale ciągle je buforuje -> commity w czasie optymalizacji będą opóźnione w czasie; Optymalizacja jest per core;
+
+Pytanie z sali: Czy segmenty są przetwarzane współbieżnie?
+Odpowiedź: Nie wiem, ale zgadywałbym, że nie. 
+
+Proces tworzenia nowego InsexSearcher:
+	1. auto-warming: powtórzy kilka (konfigurowalna ilość) ostatnich zapytań, żeby rozgrzać;
+	2. staticWarming: predefiniowane zapytania populujące cache;
+
+Podpowiedź prowadzącego: Co jak cache mi się rozgrzewa 45 sek, a commit mam co 30 sek? Rozbić na kilka osobnych instancji (każda ze swoim cache) - maksymalnie rozgrzewa się konfigurowalna liczba instancji, a pozostałe serwują żądania - później zmiana; Prowadzący radzi ustawiać liczbę maxWarmingSearchers na 1;
+
+numDocs - całkowita liczba dokumentów w indeksie;
+maxDocs - liczba dokumentów nieusuniętych w indeksie;
+storedFields, compresedStoredFields, indexed - różnice?
+copyfieldy nie powinny być stored;
+
+Jak wygląda indeks:
+na slajdzie: Term position - przydatne do określania odległości między termami trafionymi, co wpływa na score;
+norms - if u do an index time boosing - that's a normalization;
+
+Pytanie z sali: czy można wybrać funkcję do normalizacji?
+Odpowiedź: później;
+
+Pytanie z sali: Jak działa Near Real Time Delete?
+Odpowiedź: Później;
+
+Podpowiedź prowadzącego: Lucene near-real-time merging (TieredMergePolicy) - film na youtube o mergowaniu segmentów lucene wikipedii; widać na nim, że znacznie rzadziej rusza się większe indeksy;
+
+Pytanie z sali: Czy można warunkowo wybierać "Merge Policy"?
+Odpowiedź: Tylko konfiguruje się "Merge Policy".
+
+Storage is efficient - kiedy nie damy wartości na polu, w segmencie się nic nie znajdzie -> w przeciwieństwie do relacyjnej bazy danych, która alokuje miejsce;
+
+Replikacja w 3.x powoduje brak optymalizacji na węzłach slave - zmergowany segment jest przesłany jak każdy inny plik z węzła master;
+
+w 4.0 można robić soft-commit -> tworzy in-memory segment (dla wszystkich dokumentów, które nie zostały jeszcze scommitowane) + in-memory cache tego segmentu; w wyszukaniu sprawdza segmenty w plikach i soft-commit; Przy hard-commit, zawartość segmentu in-memory zostaje zapisana na dysk (a cały czas wyszukania serwuje in-memory segment - dopiero po zakończeniu zapisu i dołączeniu pliku do listy segmentów, atomowo jest usuwany z pamięci; Prowadzący nie wiedział, co się stanie, jak w czasie tej operacji zostanie przysłany nowy dokument), a cache już jest; Tak mniej więcej działa NRT Search; Jest to wymagające pamięciowo, po każdy soft commit powoduje zbudowanie nowego segmentu w pamięci;
+
+Podpowiedź prowadzącego: naprawdę warto przydzielać OS dużo RAMu, żeby wykorzystywał disc cache;
+
+NRT Get -> wyszukuje z danych, których jeszcze nie ma w segmentach (na dysku czy w pamięci); czyta z transaction log -> jest to pierwsze miejsce, do którego zostaną zapisane dane;
+
+Ciekawostka prowadzącego: PartialSplitter -> tworzy oszukane usunięcia (inne dokumenty są usuwane dla innej instancji), a późnije przepisuje indeks, co usuwa usunięcia;
