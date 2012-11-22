@@ -12,7 +12,7 @@ Day 2:
 zmiany 3.x - 4.0:
 	lucene 4.x - przepisany od zera, czasem 40x(!) szybszy
 	syntactic sugar, np 
-		range queries [] - inclusive, [) -exclusive, 
+		range queries [] - inclusive, [} -exclusive, 
 		regexp search
 		partial updates
 	solr cloud
@@ -102,8 +102,8 @@ Proces tworzenia nowego InsexSearcher:
 
 Podpowiedź prowadzącego: Co jak cache mi się rozgrzewa 45 sek, a commit mam co 30 sek? Rozbić na kilka osobnych instancji (każda ze swoim cache) - maksymalnie rozgrzewa się konfigurowalna liczba instancji, a pozostałe serwują żądania - później zmiana; Prowadzący radzi ustawiać liczbę maxWarmingSearchers na 1;
 
-numDocs - całkowita liczba dokumentów w indeksie;
-maxDocs - liczba dokumentów nieusuniętych w indeksie;
+numDocs - liczba dokumentów nieusuniętych w indeksie;
+maxDocs - całkowita liczba dokumentów w indeksie;
 storedFields, compresedStoredFields, indexed - różnice?
 copyfieldy nie powinny być stored;
 
@@ -133,3 +133,38 @@ Podpowiedź prowadzącego: naprawdę warto przydzielać OS dużo RAMu, żeby wyk
 NRT Get -> wyszukuje z danych, których jeszcze nie ma w segmentach (na dysku czy w pamięci); czyta z transaction log -> jest to pierwsze miejsce, do którego zostaną zapisane dane;
 
 Ciekawostka prowadzącego: PartialSplitter -> tworzy oszukane usunięcia (inne dokumenty są usuwane dla innej instancji), a późnije przepisuje indeks, co usuwa usunięcia;
+
+Możliwa jest analiza wynikowego Query, czasów wykonania przez konkretne componenty (QueryComponent, FacetComponent, StastComponent itp), poprzez dodanie flagi debugQuery=true.
+
+{q.op=AND}harry potter -> zastępuje spację operatorem AND - nie trzeba konfigurować w schemacie.
+
+Filter querie does not contriubute to the score.
+Search Querie jest cachowane tylko po to, żeby utrzymało się w pamięci aż do zakończenia wyszukania; Trzeba mieć cache tak duży, ile jednocześnie zapytań się realizuje;
+
+Podpowiedź prowadzącego: 
+	* Sortowanie + scoring +  limit + offset jest bardzo wymagające obliczeniowo; na początku się sortuje, a później pobiera limit i offset. 
+	* Reversed wildcard - *abc jest dużo szybciej wyszukać jako cba* w odwróconym indeksie -> copyfield + ReversedWildcardFilterFactory, Solr sam korzysta z innego pola w takich sytuacjach
+	* positionIncrementGap -> dla multivalue fields, oddziela ich pozycje od siebie o zadaną wartość, przez co moga nie zostać złapane podczas wyszukiwania; np Harry;Potter -> Harry - position 1, Potter - position 1 -> wyszukanie po Harry Potter trafi, bo pozycje tych termów są blisko;
+
+Scoring:
+TFIDF - main scoring mechanism; is calculated for every signle document; sometimes precomputing fields for scoring is useful; Prosta implementacja VSM;
+Lucene scoring VSP(Vector Space model):
+	język z dwoma wyrazami;podobieństwo to kosinus kąta powstałego pomiędzy długością wektora jednego wyrazu a drugiego; słowa w płaszyźnie dwuwymiarowej układają się ortogalnie;np who i the; who - 1+ w pionie, the = 1+ w poziomie; ciąg "thewho" daje trójkąt o przyprostokątnych 1 - 1,
+ciąg "thethewho" 2 - 1 itp;
+Solr 4.0 - inny scoring mechanism, per field a nie per document;
+Boolean aproach - albo pasuje, albo nie
+
+Similarity - per field, defined in schema;
+
+Term Frequency: tf - jak często term występuje w dokumencie; im więcej, tym lepiej;
+Inverse Document Freq - w jak dużej ilości dokumentów występuje term; im mniej, tym lepiej;
+
+Podpowiedź prowadzącego: ponieważ maxDoc pojawia się wielokrotnie w wyliczeniach częstotliwości trafień, a bieże pod uwagę usunięte dokumenty, jest szansa, ze wynik scoringu będzie niedokładny z powodu istnienia usuniętów dokumentów;
+
+Distributed search uniemożliwia wyliczenie dokładnego IDF! - niezależne indeksy nie wiedzą nic o sobie; Węzeł, który zbiera dane, możemy jedynie trzymać kciuki, że są w porządku :) Jest zgłoszony ticket, żeby zaimplementować rozproszony IDF;
+
+Prowadzący na ApacheCon zapytał o reshirding(?) - zmiana liczby shardów z 3 na 4, które równomiernie rozłoży obciążenie bez konieczności ponownego przeindeksowania wszystkich dokumentów;
+
+
+Activities do zrobienia:
+
