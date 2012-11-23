@@ -207,3 +207,17 @@ Anegdotka: "I find XSLT an art, which not everybody gets" :)
 Batching w 4.0 będzie mniej wydajny niż w 3.x, ponieważ decyzja, do którego węzła powinien trafić zbiór danych będzie podejmowana przez klaster, a nie przez klienta; Możliwa jest przypadłość, że paczka będzie musiała być rozparcelowana na kilka węzłów przez pierwszy w klastrze, który całą paczkę otrzymał;
 
 Poprawka do slajdów: "in memory data can't be replicated" - slajd przed replikacji TransactionLog pomiędzy węzłami klastra;
+
+Czym jest FilterQuery?
+jest to mapa bitowa ("bit set comparision"), czy dany dokument pasuje do zadanego filtru, np:
+Klucz w mapie FilterQuieries:		Wartości w filtrze:
+["category:animal"]
+					-> ID = 1 -> 0;
+					-> ID = 2 -> 1;
+					-> ID = 3 -> 1;
+
+Po zrealizowaniu zapytania (search query) filtry są nakładane: jeśli jest w cache, to po prostu bierze się te dokumeny, których ID są wyróznione w mapie; Jak nie ma w cache, zapytanie się wykonuje i wyniki są AND - owane;
+
+Dodanie kosztu filtru, pozwala zarządzać kolejnością wykonania filtrów;
+
+Eksperymentalnie w Lucene jest już opcja zagnieżdżania dokumentów -> zostaną zaindeksowane w tym samym segmencie;
