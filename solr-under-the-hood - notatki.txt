@@ -1,4 +1,6 @@
-15 osób, różne stopnie zaawansowania (np ebay). Czasem kilka milionów dokumentów.
+--- Dzień pierwszy: ---
+
+15 osób, różne stopnie zaawansowania i zastosowania (np ebay, spółka finansowa, e-commerce). Czasem kilka milionów dokumentów.
 Głównie Solr 3.x
 
 Day 1:
@@ -127,6 +129,11 @@ Storage is efficient - kiedy nie damy wartości na polu, w segmencie się nic ni
 Replikacja w 3.x powoduje brak optymalizacji na węzłach slave - zmergowany segment jest przesłany jak każdy inny plik z węzła master;
 
 w 4.0 można robić soft-commit -> tworzy in-memory segment (dla wszystkich dokumentów, które nie zostały jeszcze scommitowane) + in-memory cache tego segmentu; w wyszukaniu sprawdza segmenty w plikach i soft-commit; Przy hard-commit, zawartość segmentu in-memory zostaje zapisana na dysk (a cały czas wyszukania serwuje in-memory segment - dopiero po zakończeniu zapisu i dołączeniu pliku do listy segmentów, atomowo jest usuwany z pamięci; Prowadzący nie wiedział, co się stanie, jak w czasie tej operacji zostanie przysłany nowy dokument), a cache już jest; Tak mniej więcej działa NRT Search; Jest to wymagające pamięciowo, po każdy soft commit powoduje zbudowanie nowego segmentu w pamięci;
+Konfigurowalny jest rozmiar bloku pamięci i liczba dokumentów; 
+W pewnym momencie został dodany DocumentWriterPerThread -> proces flushowania segmentu na dysk został rozbity na wątki; Jeśli commit nie nastąpi (w przytpadku commitu wszystkie wątki i tak zrzucały całe swoje segmentu na dysk), to tylo te wątki, które przekrowczą
+	* zadany rozmiar bloku pamięci (RAMBufferSizeMB) lub
+	* liczbę dokumentów w in-memory segment (MaxBufferedDocs)
+będą flushować na dysk; Dzięki temu mniej częste są sytuacje, kiedy w momencie flushowania wszystkie wątki są zajęte i nikt nie przyjmuje dokumentów)  
 
 Podpowiedź prowadzącego: naprawdę warto przydzielać OS dużo RAMu, żeby wykorzystywał disc cache;
 
@@ -165,6 +172,38 @@ Distributed search uniemożliwia wyliczenie dokładnego IDF! - niezależne indek
 
 Prowadzący na ApacheCon zapytał o reshirding(?) - zmiana liczby shardów z 3 na 4, które równomiernie rozłoży obciążenie bez konieczności ponownego przeindeksowania wszystkich dokumentów;
 
+--- Dzień drugi: ---
 
-Activities do zrobienia:
+Różnice pomiędzy Core, Instance, Shard, Collection:
+	* instance = instancja JVM z Solrm kontener dla corów;
+	* core = może być ich wiele na jednej instancji Solr; można nimi niezależnie zarządzać (poprzez CoreAdminHandler), np przeładować pojedynczo bez konieczności zatrzymania całego procesu z Solr; W Solr 4.0 core po reloadzie odpyta ZooKeepera o aktualną konfigurację;
+	* collection = cały indeks, który może składać się z wielu corów/shardów - de facto core jest tylko częścią całej kolekcji; Lucene nie ma świadomości kolekcji - Solr obsługuje łączenie wyników zapytania z wielu shardów;
+	* shard jest jedynie koncepcją; shard = core z identyczną definicą schematu; Dodatkowo - jak idzie zapytanie do kolekcji, każdy z shardów musi byc odpytany;
+	* "this core implements this shard of this collection"; Z punktu widzenia zapytania (search query) nie ma różnicy między corem a shardem;
+	* Sharding ma sens dla dużych kolekcji, > ~10 000 000 medium-size dokumentów; sharding ma sens, żeby uniknąć wielkich segmentów - jak segmenty staną się tak olbrzymie, że proces łączenia będzie niezwykle kosztowny, warto uwzglęnić sharding;
 
+W Solr 4.0 SolrJ może odpytać ZooKeepera o strukturę klastra, a dopiero później SolrJ wybiera sam węzeł do komunikacji; ZooKeeper trzyma otwarte połączenie (socket connection) z każdym węzłem;
+
+Anegdota prowadzącego: Guardian miał 2 cory, przez noc przeindeksowywał wszystko na jednym i podmieniał;
+
+Pseudo - joins:
+	Można robić cross-core joins; pseudo-join jest trochę jak inner join w SQL;
+
+Pytanie z sali: Można stocki trzymać poza produktami?
+Odpowiedź: Jak najbardziej, na osobnym corze; Wtedy cross-core join pomiędzy corami na zawężenie;
+
+Pytanie z sali: indeksujemy 350 000 000 dokumentów w czasie 1 tygodnia; Co może pomóc?
+Odpowiedź: Może multi core, może shards; Dla takiej skali nie warto trzymać wielu corów na jednej instancji;
+
+W 4.0 Solr domyślną konfiguracją jest multi-colre, nawet jak mamy tylko jeden core;
+
+* solr.xml
+sharedLib = jak napisaliśmy pluginy, to chcemy je współdzielić pomiędzy corami;
+
+W SolrCloud replikacja jest inna niż w Solr 3.x; Wcześniej węzeł master jest nieświadomy slaveów, które go odpytują cyklicznie o zmiany; w 4.0 transakcja z mastera jest propagowana na slavy - "every box is an indexer" -> decyzja podjęta dla zapewnienia NRT; Przez to slavy wykonują więcej pracy!;
+
+Anegdotka: "I find XSLT an art, which not everybody gets" :)
+
+Batching w 4.0 będzie mniej wydajny niż w 3.x, ponieważ decyzja, do którego węzła powinien trafić zbiór danych będzie podejmowana przez klaster, a nie przez klienta; Możliwa jest przypadłość, że paczka będzie musiała być rozparcelowana na kilka węzłów przez pierwszy w klastrze, który całą paczkę otrzymał;
+
+Poprawka do slajdów: "in memory data can't be replicated" - slajd przed replikacji TransactionLog pomiędzy węzłami klastra;
